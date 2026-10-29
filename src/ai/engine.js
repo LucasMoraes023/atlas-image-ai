@@ -1,4 +1,5 @@
 // Pipeline SD-Turbo (1 etapa, 512x512) com ONNX Runtime Web + WebGPU, adaptado do exemplo oficial de guschmue/ort-webgpu.
+// Memória enxuta: download em streaming direto para o Cache e text encoder carregado só durante a codificação.
 import * as ort from 'onnxruntime-web/webgpu';
 import { AutoTokenizer, env } from '@xenova/transformers';
 import { makeRng, randnLatents, toRgba } from './params.js';
@@ -19,16 +20,18 @@ const SPECS = {
   vae_decoder: { mb: 95, dims: { batch_size: 1, num_channels_latent: 4, height_latent: 64, width_latent: 64 } },
 };
 const urlOf = (n) => `${MODEL_BASE}/${n}/model.onnx`;
+const mb = (n) => (n / 1048576).toFixed(0);
 const BASE_OPT = {
   executionProviders: ['webgpu'],
   enableMemPattern: false,
   enableCpuMemArena: false,
-  preferredOutputLocation: { last_hidden_state: 'gpu-buffer' },
   extra: { session: { disable_prepacking: '1', use_device_allocator_for_initializers: '1', use_ort_model_bytes_directly: '1', use_ort_model_bytes_for_initializers: '1' } },
 };
 
 let tokenizer = null;
-let sessions = null;
+let unet = null;
+let vae = null;
+let status = () => {};
 
 export const tokenizerReady = () => localStorage.getItem('atlas.tok') === '1';
 
@@ -38,66 +41,68 @@ export async function modelsCached() {
   return hits.every(Boolean);
 }
 
-async function fetchCached(url, onBytes, signal) {
+// Baixa direto para o Cache, com contagem de bytes e contrapressão: nada fica inteiro na memória do JS.
+async function download(name, signal) {
+  const url = urlOf(name);
   const cache = await caches.open(CACHE);
-  const hit = await cache.match(url);
-  if (hit) return hit.arrayBuffer();
+  if (await cache.match(url)) return;
   const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`Falha ao baixar o modelo (HTTP ${res.status}).`);
-  const total = Number(res.headers.get('content-length')) || 0;
-  const reader = res.body.getReader();
-  const parts = [];
+  if (!res.ok || !res.body) throw new Error(`Falha ao baixar o modelo (HTTP ${res.status}).`);
+  const total = Number(res.headers.get('content-length')) || SPECS[name].mb * 1048576;
   let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parts.push(value);
-    got += value.length;
-    onBytes(got, total);
-  }
-  const blob = new Blob(parts);
-  await cache.put(url, new Response(blob));
-  return blob.arrayBuffer();
+  const counted = res.body.pipeThrough(new TransformStream({
+    transform(chunk, ctl) {
+      got += chunk.length;
+      status(`Baixando ${name}: ${mb(got)} de ${mb(total)} MB`, Math.min(1, got / total));
+      ctl.enqueue(chunk);
+    },
+  }));
+  await cache.put(url, new Response(counted, { headers: { 'content-type': 'application/octet-stream' } }));
+}
+
+async function createSession(name) {
+  const res = await (await caches.open(CACHE)).match(urlOf(name));
+  if (!res) throw new Error(`O modelo ${name} não está no cache.`);
+  status(`Iniciando ${name} na GPU…`, null);
+  return ort.InferenceSession.create(new Uint8Array(await res.arrayBuffer()), { ...BASE_OPT, freeDimensionOverrides: SPECS[name].dims });
 }
 
 export async function load(onStatus, signal) {
-  if (sessions) return;
+  status = onStatus;
   if (!tokenizer) {
-    onStatus('Carregando tokenizador…', null);
+    status('Carregando tokenizador…', null);
     tokenizer = await AutoTokenizer.from_pretrained('Xenova/clip-vit-base-patch16');
     localStorage.setItem('atlas.tok', '1');
   }
-  const s = {};
-  for (const [name, spec] of Object.entries(SPECS)) {
-    const buf = await fetchCached(urlOf(name), (got, total) => {
-      const t = total || spec.mb * 1048576;
-      onStatus(`Baixando ${name}: ${(got / 1048576).toFixed(0)} de ${(t / 1048576).toFixed(0)} MB`, got / t);
-    }, signal);
-    onStatus(`Iniciando ${name} na GPU…`, null);
-    s[name] = await ort.InferenceSession.create(buf, { ...BASE_OPT, freeDimensionOverrides: spec.dims });
-  }
-  sessions = s;
+  for (const name of Object.keys(SPECS)) await download(name, signal);
+  if (!vae) vae = await createSession('vae_decoder');
+  if (!unet) unet = await createSession('unet');
 }
 
 export async function generate({ prompt, seed }, signal) {
   const check = () => { if (signal?.aborted) throw new DOMException('Interrompido', 'AbortError'); };
   const { input_ids: ids } = await tokenizer(prompt, { padding: true, max_length: 77, truncation: true, return_tensor: false });
-  const { last_hidden_state: hidden } = await sessions.text_encoder.run({ input_ids: new ort.Tensor('int32', Int32Array.from(ids), [1, ids.length]) });
+  status('Codificando o prompt…', null);
+  const te = await createSession('text_encoder'); // só existe durante esta etapa, para poupar memória
+  let hidden;
   try {
-    check();
-    const noise = randnLatents(4 * 64 * 64, SIGMA, makeRng(seed));
-    const div = Math.sqrt(SIGMA ** 2 + 1);
-    const { out_sample: eps } = await sessions.unet.run({
-      sample: new ort.Tensor('float32', noise.map((v) => v / div), [1, 4, 64, 64]),
-      timestep: new ort.Tensor('int64', [999n], [1]),
-      encoder_hidden_states: hidden,
-    });
-    check();
-    const lat = new Float32Array(noise.length);
-    for (let i = 0; i < lat.length; i += 1) lat[i] = (noise[i] - SIGMA * eps.data[i]) / VAE_SCALE;
-    const { sample } = await sessions.vae_decoder.run({ latent_sample: new ort.Tensor('float32', lat, [1, 4, 64, 64]) });
-    return toRgba(sample.data, SIZE);
+    const o = (await te.run({ input_ids: new ort.Tensor('int32', Int32Array.from(ids), [1, ids.length]) })).last_hidden_state;
+    hidden = new ort.Tensor(o.type, o.data.slice(), o.dims);
   } finally {
-    hidden.dispose();
+    await te.release();
   }
+  check();
+  status('Gerando a imagem…', null);
+  const noise = randnLatents(4 * 64 * 64, SIGMA, makeRng(seed));
+  const div = Math.sqrt(SIGMA ** 2 + 1);
+  const { out_sample: eps } = await unet.run({
+    sample: new ort.Tensor('float32', noise.map((v) => v / div), [1, 4, 64, 64]),
+    timestep: new ort.Tensor('int64', [999n], [1]),
+    encoder_hidden_states: hidden,
+  });
+  check();
+  const lat = new Float32Array(noise.length);
+  for (let i = 0; i < lat.length; i += 1) lat[i] = (noise[i] - SIGMA * eps.data[i]) / VAE_SCALE;
+  const { sample } = await vae.run({ latent_sample: new ort.Tensor('float32', lat, [1, 4, 64, 64]) });
+  return toRgba(sample.data, SIZE);
 }
