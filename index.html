@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#16161d">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>ATLAS IMAGE AI</title>
+</head>
+<body>
+<header><h1>ATLAS <span>IMAGE AI</span></h1><p id="chip" role="status"></p></header>
+<nav aria-label="Seções"><button data-tab="create" class="on">Criar</button><button data-tab="gallery">Galeria</button><button data-tab="settings">Config</button></nav>
+<main>
+<section id="create">
+  <label for="prompt">Prompt (é exatamente isto que o modelo recebe)</label>
+  <textarea id="prompt" rows="4" maxlength="1000" placeholder="Descreva a imagem"></textarea>
+  <div id="presets" aria-label="Presets"></div>
+  <small>Presets acrescentam texto visível ao prompt. Edite à vontade.</small>
+  <label for="neg">Prompt negativo</label>
+  <textarea id="neg" rows="2" disabled placeholder="Indisponível"></textarea>
+  <small>Desabilitado: o SD-Turbo roda sem orientação (CFG), então prompt negativo e intensidade de orientação não têm efeito.</small>
+  <div class="row">
+    <label>Seed<input id="seed" inputmode="numeric" placeholder="aleatória"></label>
+    <label>Resolução<input value="512×512" disabled></label>
+    <label>Etapas<input value="1" disabled></label>
+  </div>
+  <small>Resolução e etapas são fixas nesta versão (o modelo foi preparado para 512×512 em 1 etapa).</small>
+  <button id="go">Gerar</button>
+  <button id="stop" hidden>Interromper</button>
+  <progress id="bar" max="1" hidden></progress>
+  <p id="msg" role="status"></p>
+  <canvas id="out" width="512" height="512" hidden></canvas>
+</section>
+<section id="gallery" hidden><div id="grid"></div></section>
+<section id="settings" hidden>
+  <ul id="info"></ul>
+  <p>Rede: só o download dos arquivos do modelo e do tokenizador (huggingface.co), na primeira geração. Prompts e imagens nunca saem do aparelho. Limpar os dados do navegador apaga a galeria.</p>
+  <div class="acts"><button id="clr-models">Apagar modelos em cache</button><button id="clr-gallery">Apagar galeria</button></div>
+</section>
+</main>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
