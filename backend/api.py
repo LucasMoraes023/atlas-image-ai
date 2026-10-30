@@ -77,6 +77,9 @@ def load_model(name):
     else:
         from diffusers import AutoPipelineForText2Image
         p = AutoPipelineForText2Image.from_pretrained(m["repo"], torch_dtype=torch.float16, variant="fp16", use_safetensors=True).to("cuda")
+    if m["kind"] == "sdxl":
+        from diffusers import DPMSolverMultistepScheduler
+        p.scheduler = DPMSolverMultistepScheduler.from_config(p.scheduler.config, use_karras_sigmas=True, algorithm_type="sde-dpmsolver++")
     ST["pipe"], ST["name"] = p, name
     return p
 
