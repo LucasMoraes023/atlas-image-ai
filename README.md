@@ -42,3 +42,8 @@ WebGPU exige HTTPS ou localhost.
 ## Fora desta versão
 
 Testes automatizados de geração/modelo, exportação e importação de configurações, múltiplos modelos, mais de 1 etapa, ícones PNG, escolha de resolução. Offline: aparece como "pronto" só quando modelo, tokenizador e service worker estão em cache.
+
+## Versão Colab (GPU gratuita)
+
+Para celulares que não aguentam o modelo no navegador: `colab/ATLAS_Image_AI.ipynb` roda SDXL 1.0 base e SDXL-Turbo na GPU do Google Colab, com interface Gradio (prompt negativo, CFG, etapas, resolução, seed). Prompts e imagens passam pelos servidores do Google e pelo relé do Gradio. Não testado numa GPU real pelo autor do código.
+Abrir: https://colab.research.google.com/github/LucasMoraes023/atlas-image-ai/blob/main/colab/ATLAS_Image_AI.ipynb
