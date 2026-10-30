@@ -1,49 +1,22 @@
-# ATLAS IMAGE AI
+# ATLAS IMAGE AI (v2)
 
-Gerador de imagens por IA que roda **no navegador** (ONNX Runtime Web + WebGPU), sem API de inferência, sem chave e sem backend.
+Site (React/Vite) + API FastAPI que roda na GPU gratuita do Google Colab. Funciona pelo celular.
 
-## Estado real
+## Como usar
+1. Publique a pasta `frontend` (Netlify: o `netlify.toml` da raiz já configura; ou GitHub Pages com `npm run build` e a pasta `dist`).
+2. Abra `colab/ATLAS_IMAGE_AI_COLAB.ipynb` no Colab, escolha **T4 GPU**, ajuste `FRONTEND_URL` na última célula e toque em **Executar tudo**.
+3. A última célula mostra um **link de conexão**. Abra-o no celular: o site guarda a conexão e limpa o link da barra de endereço.
+4. Se a sessão cair, execute a última célula de novo e abra o novo link.
 
-- Testado aqui: testes unitários (`npm test`) e build de produção (`npm run build`).
-- **Não testado:** a geração de imagem em si. O ambiente de desenvolvimento não tinha GPU nem acesso ao Hugging Face. Nenhum teste foi feito em celular Android. O pipeline segue o exemplo oficial de SD-Turbo do ORT Web (guschmue/ort-webgpu), mas precisa ser validado no seu aparelho.
+## Segurança
+O túnel é público, mas a API só responde com a chave aleatória gerada a cada execução (vai no `#` do link, que não é enviado a servidores). Não salve o notebook com a saída no GitHub: ela contém a chave. Cada execução gera uma chave nova.
 
-## Modelo
+## Transparência
+O prompt enviado ao modelo é mostrado na tela. Estilo "Nenhum" não acrescenta nada; os outros acrescentam um texto exibido antes de gerar. A tradução PT→EN é opcional.
 
-SD-Turbo em ONNX fp16 (`schmuell/sd-turbo-ort-web`), 512×512, 1 etapa, cerca de 2,4 GB baixados na primeira geração (ficam no cache do navegador). Exige Chrome com WebGPU e `shader-f16` (Android 12+ e GPU recente, vários GB de RAM). Em aparelhos modestos, o carregamento pode falhar por falta de memória.
+## Limites
+Colab gratuito tem cota, sessões temporárias e GPU não garantida. FLUX.1 schnell é experimental no Colab gratuito. Confira a licença de cada modelo antes de uso comercial.
 
-**Licença:** confira a licença atual de `stabilityai/sd-turbo` e do repositório ONNX antes de qualquer uso comercial. As restrições de uso do modelo continuam valendo para o que você gerar.
-
-## Controles
-
-Reais: prompt, seed, presets (acrescentam texto visível ao prompt), galeria, download, exclusão, reuso.
-Desabilitados, com explicação na tela: prompt negativo, orientação (CFG), etapas e resolução (o SD-Turbo roda sem CFG, em 1 etapa e 512×512 nesta versão).
-O prompt enviado ao modelo é exatamente o do campo de texto. Não há lista de palavras bloqueadas.
-
-## Privacidade
-
-Prompts e imagens ficam no aparelho (IndexedDB). A única rede usada é o download dos arquivos do modelo e do tokenizador em huggingface.co. Limpar os dados do navegador apaga a galeria.
-
-## Rodar
-
-```
-npm install
-npm run dev      # desenvolvimento
-npm test         # testes unitários
-npm run build && npm run preview
-```
-WebGPU exige HTTPS ou localhost.
-
-## Publicar pelo celular (grátis)
-
-1. Crie um repositório no GitHub e envie os arquivos do projeto (sem `node_modules` e `dist`).
-2. No Netlify: Add new site → Import from Git → escolha o repositório. O `netlify.toml` já define build e pasta `dist`.
-3. Abra o endereço no Chrome do Android e toque em Gerar. Para desenvolver sem PC, use GitHub Codespaces (plano grátis) no navegador.
-
-## Fora desta versão
-
-Testes automatizados de geração/modelo, exportação e importação de configurações, múltiplos modelos, mais de 1 etapa, ícones PNG, escolha de resolução. Offline: aparece como "pronto" só quando modelo, tokenizador e service worker estão em cache.
-
-## Versão Colab (GPU gratuita)
-
-Para celulares que não aguentam o modelo no navegador: `colab/ATLAS_Image_AI.ipynb` roda SDXL 1.0 base e SDXL-Turbo na GPU do Google Colab, com interface Gradio (prompt negativo, CFG, etapas, resolução, seed). Prompts e imagens passam pelos servidores do Google e pelo relé do Gradio. Não testado numa GPU real pelo autor do código.
-Abrir: https://colab.research.google.com/github/LucasMoraes023/atlas-image-ai/blob/main/colab/ATLAS_Image_AI.ipynb
+## Alternativas
+- `colab/ATLAS_Image_AI.ipynb`: versão mais simples, tudo dentro do Colab (interface Gradio, sem site separado).
+- Tag `v1-webgpu-wasm`: primeira versão, que roda o modelo no próprio navegador via WebGPU (exige celular potente).
