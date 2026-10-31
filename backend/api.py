@@ -139,7 +139,7 @@ def run(job, req):
     if req.style in STYLES:
         text = f"{text}, {STYLES[req.style]}"
     job["processed_prompt"] = text
-    job["message"] = "Carregando o modelo (na primeira vez demora)…"
+    job["message"] = "Carregando o modelo (na primeira vez baixa ~7 GB: 5 a 15 min; depois, 1 a 3 min)…"
     pipe = load_model(req.model)
     steps, cfg, kw = req.steps, req.guidance, {}
     w, h = SIZES.get(req.size, SIZES["Quadrado 1:1"])
