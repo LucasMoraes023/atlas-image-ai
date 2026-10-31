@@ -113,7 +113,10 @@ def load_model(name):
         except Exception:
             p = AutoPipelineForText2Image.from_pretrained(m["repo"], torch_dtype=torch.float16, use_safetensors=True)
         p = p.to("cuda")
-        p.enable_vae_tiling()
+        try:
+            p.vae.enable_tiling()
+        except Exception:
+            pass
     if m["kind"] == "sdxl":
         from diffusers import DPMSolverMultistepScheduler
         p.scheduler = DPMSolverMultistepScheduler.from_config(p.scheduler.config, use_karras_sigmas=True, algorithm_type="sde-dpmsolver++")
