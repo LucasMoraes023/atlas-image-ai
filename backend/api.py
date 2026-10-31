@@ -12,6 +12,7 @@ app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=["GET", 
 
 MODELS = {
     "SDXL 1.0 base": {"repo": "stabilityai/stable-diffusion-xl-base-1.0", "kind": "sdxl"},
+    "Playground v2.5": {"repo": "playgroundai/playground-v2.5-1024px-aesthetic", "kind": "playground"},
     "SDXL-Turbo": {"repo": "stabilityai/sdxl-turbo", "kind": "turbo"},
     "FLUX.1 schnell": {"repo": "black-forest-labs/FLUX.1-schnell", "kind": "flux"},
 }
@@ -39,6 +40,9 @@ class Req(BaseModel):
     seed: int = Field(default=-1, ge=-1, le=2**32 - 1)
     count: int = Field(default=1, ge=1, le=4)
     translate: bool = True
+    init_image: str = Field(default="", max_length=14_000_000)
+    strength: float = Field(default=0.6, ge=0.05, le=1.0)
+    upscale: float = Field(default=1.0, ge=1.0, le=2.0)
 
 
 def auth(x_atlas_key: str = Header(default="")):
@@ -47,7 +51,7 @@ def auth(x_atlas_key: str = Header(default="")):
 
 
 JOBS, Q = {}, queue.Queue()
-ST = {"pipe": None, "name": None, "tok": None, "mdl": None}
+ST = {"pipe": None, "name": None, "tok": None, "mdl": None, "i2i": None}
 
 
 def to_en(text):
@@ -63,7 +67,7 @@ def to_en(text):
 def load_model(name):
     if ST["name"] == name:
         return ST["pipe"]
-    ST["pipe"], ST["name"] = None, None
+    ST["pipe"], ST["name"], ST["i2i"] = None, None, None
     gc.collect(); torch.cuda.empty_cache()
     m = MODELS[name]
     if m["kind"] == "flux":
@@ -76,7 +80,12 @@ def load_model(name):
         p.enable_model_cpu_offload()
     else:
         from diffusers import AutoPipelineForText2Image
-        p = AutoPipelineForText2Image.from_pretrained(m["repo"], torch_dtype=torch.float16, variant="fp16", use_safetensors=True).to("cuda")
+        try:
+            p = AutoPipelineForText2Image.from_pretrained(m["repo"], torch_dtype=torch.float16, variant="fp16", use_safetensors=True)
+        except Exception:
+            p = AutoPipelineForText2Image.from_pretrained(m["repo"], torch_dtype=torch.float16, use_safetensors=True)
+        p = p.to("cuda")
+        p.enable_vae_tiling()
     if m["kind"] == "sdxl":
         from diffusers import DPMSolverMultistepScheduler
         p.scheduler = DPMSolverMultistepScheduler.from_config(p.scheduler.config, use_karras_sigmas=True, algorithm_type="sde-dpmsolver++")
@@ -88,6 +97,8 @@ def run(job, req):
     job.update(status="running", message="Preparando…")
     notes, kind = [], MODELS[req.model]["kind"]
     text, neg = req.prompt.strip(), req.negative_prompt.strip()
+    if req.init_image and kind == "flux":
+        raise ValueError("O FLUX schnell não aceita imagem de referência. Use SDXL ou Playground.")
     if req.translate:
         job["message"] = "Traduzindo para inglês…"
         try:
@@ -99,33 +110,64 @@ def run(job, req):
     job["processed_prompt"] = text
     job["message"] = "Carregando o modelo (na primeira vez demora)…"
     pipe = load_model(req.model)
+    steps, cfg, kw = req.steps, req.guidance, {}
     w, h = SIZES.get(req.size, SIZES["Quadrado 1:1"])
-    steps, cfg, extra = req.steps, req.guidance, {}
     if kind == "turbo":
         w, h, steps, cfg = w // 2, h // 2, min(steps, 4), 0.0
-        notes.append("SDXL-Turbo: sem orientação, sem prompt negativo, até 4 etapas.")
+        notes.append("SDXL-Turbo: sem orientação nem prompt negativo, até 4 etapas.")
     elif kind == "flux":
-        steps, cfg, extra = (steps if steps <= 8 else 4), 0.0, {"max_sequence_length": 256}
-        notes.append("FLUX schnell: sem orientação, sem prompt negativo, até 8 etapas.")
+        steps, cfg = (steps if steps <= 8 else 4), 0.0
+        notes.append("FLUX schnell: sem orientação nem prompt negativo, até 8 etapas.")
+    elif kind == "playground":
+        cfg = min(cfg, 4.0)
+        notes.append("Playground v2.5: orientação limitada a 4.")
+    if kind in ("sdxl", "playground"):
+        try:
+            from compel import Compel, ReturnedEmbeddingsType
+            c = Compel(tokenizer=[pipe.tokenizer, pipe.tokenizer_2], text_encoder=[pipe.text_encoder, pipe.text_encoder_2],
+                       returned_embeddings_type=ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
+                       requires_pooled=[False, True], truncate_long_prompts=False)
+            cond, pooled = c(text)
+            ncond, npooled = c(neg or "")
+            cond, ncond = c.pad_conditioning_tensors_to_same_length([cond, ncond])
+            kw.update(prompt_embeds=cond, pooled_prompt_embeds=pooled, negative_prompt_embeds=ncond, negative_pooled_prompt_embeds=npooled)
+        except Exception as e:
+            kw.update(prompt=text, negative_prompt=neg or None)
+            notes.append(f"Prompts longos indisponíveis ({type(e).__name__}); o modelo lê só 77 tokens.")
     else:
-        extra = {"negative_prompt": neg or None}
-        n = len(pipe.tokenizer(text).input_ids)
-        if n > 77:
-            notes.append(f"O prompt tem {n} tokens e o modelo lê só 77; o final foi cortado.")
+        kw["prompt"] = text
+        if kind == "flux":
+            kw["max_sequence_length"] = 256
+    runner = pipe
+    if req.init_image:
+        import PIL.Image as PI
+        from diffusers import AutoPipelineForImage2Image
+        img0 = PI.open(io.BytesIO(base64.b64decode(req.init_image.split(",", 1)[-1]))).convert("RGB")
+        if req.upscale > 1:
+            f = min(req.upscale, 1536 / max(img0.size))
+        else:
+            f = ((512 * 512 if kind == "turbo" else 1024 * 1024) / (img0.width * img0.height)) ** 0.5
+        snap = lambda v: max(64, int(round(v / 8)) * 8)
+        kw["image"], kw["strength"] = img0.resize((snap(img0.width * f), snap(img0.height * f)), PI.LANCZOS), req.strength
+        if ST["i2i"] is None:
+            ST["i2i"] = AutoPipelineForImage2Image.from_pipe(pipe)
+        runner = ST["i2i"]
+    else:
+        kw.update(width=w, height=h)
     for i in range(req.count):
         if job["cancel"]:
             break
         s = random.randint(0, 2**32 - 1) if req.seed < 0 else (req.seed + i) % 2**32
 
-        def tick(p, step, t, kw, i=i):
+        def tick(p, step, t, kwargs, i=i):
             job["progress"] = (i + (step + 1) / steps) / req.count
             job["message"] = f"Imagem {i + 1} de {req.count} · etapa {step + 1}/{steps}"
             if job["cancel"]:
                 p._interrupt = True
-            return kw
+            return kwargs
 
         gen = torch.Generator("cpu" if kind == "flux" else "cuda").manual_seed(s)
-        img = pipe(prompt=text, width=w, height=h, num_inference_steps=steps, guidance_scale=cfg, generator=gen, callback_on_step_end=tick, **extra).images[0]
+        img = runner(num_inference_steps=steps, guidance_scale=cfg, generator=gen, callback_on_step_end=tick, **kw).images[0]
         if job["cancel"]:
             break
         buf = io.BytesIO(); img.save(buf, format="PNG")
