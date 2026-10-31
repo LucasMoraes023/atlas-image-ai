@@ -13,6 +13,8 @@ app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=["GET", 
 MODELS = {
     "SDXL 1.0 base": {"repo": "stabilityai/stable-diffusion-xl-base-1.0", "kind": "sdxl"},
     "Playground v2.5": {"repo": "playgroundai/playground-v2.5-1024px-aesthetic", "kind": "playground"},
+    "RealVisXL V5.0": {"repo": "SG161222/RealVisXL_V5.0", "kind": "sdxl"},
+    "Animagine XL 4.0": {"repo": "cagliostrolab/animagine-xl-4.0", "kind": "sdxl"},
     "SDXL-Turbo": {"repo": "stabilityai/sdxl-turbo", "kind": "turbo"},
     "FLUX.1 schnell": {"repo": "black-forest-labs/FLUX.1-schnell", "kind": "flux"},
 }
@@ -62,6 +64,27 @@ def to_en(text):
     b = ST["tok"]([text], return_tensors="pt", truncation=True, max_length=256)
     out = ST["mdl"].generate(**b, max_new_tokens=256, num_beams=4)
     return ST["tok"].decode(out[0], skip_special_tokens=True)
+
+
+LLM = {"tok": None, "mdl": None}
+SYS = ("You write prompts for text-to-image models. Translate the user's idea to English if needed, then expand it into ONE rich, concrete prompt "
+       "(subject, setting, lighting, composition, camera or lens, style, mood) in under 70 words. Keep every detail the user gave. "
+       "Do not add text, logos or extra people unless asked. Output only the prompt.")
+
+
+def enhance_prompt(text):
+    if LLM["mdl"] is None:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        n = "Qwen/Qwen2.5-1.5B-Instruct"
+        LLM["tok"], LLM["mdl"] = AutoTokenizer.from_pretrained(n), AutoModelForCausalLM.from_pretrained(n, torch_dtype=torch.float16)
+    t, m = LLM["tok"], LLM["mdl"].to("cuda")
+    chat = t.apply_chat_template([{"role": "system", "content": SYS}, {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True)
+    ids = t(chat, return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        out = m.generate(**ids, max_new_tokens=160, do_sample=True, temperature=0.7, top_p=0.9)
+    res = t.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip().strip('"')
+    m.to("cpu"); gc.collect(); torch.cuda.empty_cache()
+    return res or text
 
 
 def load_model(name):
@@ -231,3 +254,15 @@ def cancel(jid: str):
         raise HTTPException(404, "Tarefa não encontrada.")
     JOBS[jid]["cancel"] = True
     return {"ok": True}
+
+
+class PReq(BaseModel):
+    prompt: str = Field(min_length=1, max_length=800)
+
+
+@app.post("/prompt", dependencies=[Depends(auth)])
+def improve(req: PReq):
+    try:
+        return {"prompt": enhance_prompt(req.prompt.strip())}
+    except Exception as e:
+        raise HTTPException(500, f"Não foi possível melhorar o prompt ({type(e).__name__}).")
