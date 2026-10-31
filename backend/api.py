@@ -2,7 +2,7 @@
 import base64, gc, io, os, queue, random, secrets, threading, time, uuid
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import torch
 
 KEY = os.environ.get("ATLAS_KEY", "")
@@ -45,6 +45,11 @@ class Req(BaseModel):
     init_image: str = Field(default="", max_length=14_000_000)
     strength: float = Field(default=0.6, ge=0.05, le=1.0)
     upscale: float = Field(default=1.0, ge=1.0, le=2.0)
+
+    @field_validator("init_image", mode="before")
+    @classmethod
+    def _no_image(cls, v):
+        return v or ""
 
 
 def auth(x_atlas_key: str = Header(default="")):
