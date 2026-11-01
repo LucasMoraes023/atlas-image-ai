@@ -1,5 +1,5 @@
 # ATLAS IMAGE AI: API de geração (FastAPI). Roda no Colab; o notebook a publica por um túnel HTTPS.
-import base64, gc, io, os, queue, random, secrets, threading, time, uuid
+import base64, binascii, gc, io, os, queue, random, secrets, threading, time, uuid
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
@@ -48,12 +48,21 @@ class Req(BaseModel):
 
     @field_validator("init_image", mode="before")
     @classmethod
-    def _no_image(cls, v):
-        return v or ""
+    def _validate_image_payload(cls, v):
+        if not v:
+            return ""
+        if not isinstance(v, str) or len(v) > 14_000_000:
+            raise ValueError("Imagem muito grande. Limite de envio: 10 MB.")
+        if not v.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")):
+            raise ValueError("Formato inválido. Envie PNG, JPEG ou WebP.")
+        payload = v.split(",", 1)[1]
+        if len(payload) > 14_000_000:
+            raise ValueError("Imagem muito grande. Limite de envio: 10 MB.")
+        return v
 
 
 def auth(x_atlas_key: str = Header(default="")):
-    if not KEY or not secrets.compare_digest(x_atlas_key, KEY):
+    if not KEY or not x_atlas_key or not secrets.compare_digest(x_atlas_key, KEY):
         raise HTTPException(401, "Chave inválida. Use o link de conexão que o notebook mostrou.")
 
 
@@ -173,7 +182,19 @@ def run(job, req):
     if req.init_image:
         import PIL.Image as PI
         from diffusers import AutoPipelineForImage2Image
-        img0 = PI.open(io.BytesIO(base64.b64decode(req.init_image.split(",", 1)[-1]))).convert("RGB")
+        try:
+            raw = base64.b64decode(req.init_image.split(",", 1)[1], validate=True)
+            if len(raw) > 10 * 1024 * 1024:
+                raise ValueError("Imagem acima do limite de 10 MB.")
+            with PI.open(io.BytesIO(raw)) as check:
+                if check.format not in ("PNG", "JPEG", "WEBP"):
+                    raise ValueError("Formato de imagem não suportado.")
+                if check.width * check.height > 16_000_000:
+                    raise ValueError("A imagem excede o limite de 16 megapixels.")
+                check.verify()
+            img0 = PI.open(io.BytesIO(raw)).convert("RGB")
+        except (binascii.Error, OSError) as e:
+            raise ValueError("Não foi possível ler a imagem. Envie um PNG, JPEG ou WebP válido.") from e
         if req.upscale > 1:
             f = min(req.upscale, 1536 / max(img0.size))
         else:
@@ -218,7 +239,7 @@ def worker():
             gc.collect(); torch.cuda.empty_cache()
             job.update(status="error", error="GPU sem memória. Use SDXL-Turbo ou um formato menor.")
         except Exception as e:
-            job.update(status="error", error=f"{type(e).__name__}: {e}")
+            job.update(status="error", error=f"Falha ao processar ({type(e).__name__}). Verifique o modelo, a memória da GPU e tente novamente.")
 
 
 threading.Thread(target=worker, daemon=True).start()
@@ -226,7 +247,7 @@ threading.Thread(target=worker, daemon=True).start()
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "model": ST["name"]}
+    return {"status": "ok", "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "model": ST["name"], "models": list(MODELS), "queue": Q.qsize()}
 
 
 @app.post("/jobs", dependencies=[Depends(auth)])
