@@ -97,6 +97,7 @@ def auth(x_atlas_key: str = Header(default="")):
 
 JOBS, Q = {}, queue.Queue()
 ST = {"pipe": None, "name": None, "tok": None, "mdl": None, "i2i": None}
+GPU_LOCK = threading.Lock()
 
 
 def to_en(text):
@@ -123,11 +124,15 @@ def enhance_prompt(text):
     t, m = LLM["tok"], LLM["mdl"].to("cuda")
     chat = t.apply_chat_template([{"role": "system", "content": SYS}, {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True)
     ids = t(chat, return_tensors="pt").to("cuda")
-    with torch.no_grad():
-        out = m.generate(**ids, max_new_tokens=160, do_sample=True, temperature=0.7, top_p=0.9)
-    res = t.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip().strip('"')
-    m.to("cpu"); gc.collect(); torch.cuda.empty_cache()
-    return res or text
+    try:
+        with torch.no_grad():
+            out = m.generate(**ids, max_new_tokens=160, do_sample=True, temperature=0.7, top_p=0.9)
+        res = t.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip().strip('"')
+        return res or text
+    finally:
+        m.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 def load_model(name):
@@ -264,7 +269,8 @@ def worker():
     while True:
         job, req = Q.get()
         try:
-            run(job, req)
+            with GPU_LOCK:
+                run(job, req)
         except torch.cuda.OutOfMemoryError:
             gc.collect(); torch.cuda.empty_cache()
             job.update(status="error", error="GPU sem memória. Use SDXL-Turbo ou um formato menor.")
@@ -325,7 +331,11 @@ class PReq(BaseModel):
 
 @app.post("/prompt", dependencies=[Depends(auth)])
 def improve(req: PReq):
+    if not GPU_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "A GPU está ocupada com outra tarefa. Aguarde a geração terminar e tente novamente.")
     try:
         return {"prompt": enhance_prompt(req.prompt.strip())}
     except Exception as e:
         raise HTTPException(500, f"Não foi possível melhorar o prompt ({type(e).__name__}).")
+    finally:
+        GPU_LOCK.release()
