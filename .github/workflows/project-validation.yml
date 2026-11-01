@@ -62,6 +62,6 @@ jobs:
           assert len(cells) >= 4
           setup = "".join(cells[2].get("source", []))
           assert "backend/api.py" in setup
-          assert "atlas-studio-next" in setup
+          assert "85ad0b54668407e60df63f7483cc0e1f22fac7a5" in setup
           print("Notebook JSON válido e apontando para o backend versionado.")
           PY
