@@ -1,6 +1,6 @@
 import React, {useEffect,useMemo,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {ImagePlus, Sparkles, WandSparkles, Download, Trash2, RotateCcw, RotateCw, Crop, SlidersHorizontal, Images, Settings2, Upload, Wifi, WifiOff, Layers, Type, FlipHorizontal, FlipVertical, Sun, Contrast, Palette, Save, Search, Scissors, Eye, EyeOff, Type} from 'lucide-react';
+import {ImagePlus, Sparkles, WandSparkles, Download, Trash2, RotateCcw, RotateCw, Crop, SlidersHorizontal, Images, Settings2, Upload, Wifi, WifiOff, Layers, Type, FlipHorizontal, FlipVertical, Sun, Contrast, Palette, Save, Search , Scissors, Eye, EyeOff} from 'lucide-react';
 import './style.css';
 
 const saved=()=>{try{return JSON.parse(localStorage.getItem('atlas.conn')||'{}')}catch{return {}}};
