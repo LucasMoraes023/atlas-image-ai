@@ -63,6 +63,6 @@ jobs:
           setup = "".join(cells[2].get("source", []))
           assert "backend/api.py" in setup
           import re
-          assert re.search(r"raw\\.githubusercontent\\.com/LucasMoraes023/atlas-image-ai/[0-9a-f]{40}/backend/api\\.py", setup), "Notebook sem referência versionada válida ao backend."
+          assert re.search(r"raw\.githubusercontent\.com/LucasMoraes023/atlas-image-ai/[0-9a-f]{40}/backend/api\.py", setup), "Notebook sem referência versionada válida ao backend."
           print("Notebook JSON válido e apontando para o backend versionado.")
           PY
