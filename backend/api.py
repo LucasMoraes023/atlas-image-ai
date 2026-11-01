@@ -46,6 +46,35 @@ class Req(BaseModel):
     strength: float = Field(default=0.6, ge=0.05, le=1.0)
     upscale: float = Field(default=1.0, ge=1.0, le=2.0)
 
+    @field_validator("prompt")
+    @classmethod
+    def _clean_prompt(cls, v):
+        value = v.strip()
+        if not value:
+            raise ValueError("Descreva o que deseja gerar.")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def _valid_model(cls, v):
+        if v not in MODELS:
+            raise ValueError("Modelo não disponível.")
+        return v
+
+    @field_validator("size")
+    @classmethod
+    def _valid_size(cls, v):
+        if v not in SIZES:
+            raise ValueError("Formato de imagem não disponível.")
+        return v
+
+    @field_validator("style")
+    @classmethod
+    def _valid_style(cls, v):
+        if v != "Nenhum" and v not in STYLES:
+            raise ValueError("Estilo não disponível.")
+        return v
+
     @field_validator("init_image", mode="before")
     @classmethod
     def _validate_image_payload(cls, v):
@@ -225,8 +254,9 @@ def run(job, req):
         buf = io.BytesIO(); img.save(buf, format="PNG")
         job["images"].append("data:image/png;base64," + base64.b64encode(buf.getvalue()).decode())
         job["seeds"].append(s)
-    job["progress"] = 1.0
     job["status"] = "cancelled" if job["cancel"] else "done"
+    if job["status"] == "done":
+        job["progress"] = 1.0
     job["message"] = "Cancelado." if job["cancel"] else " ".join(["Concluído."] + notes)
 
 
@@ -260,7 +290,11 @@ def create(req: Req):
         raise HTTPException(429, "Fila cheia. Aguarde terminar.")
     jid = uuid.uuid4().hex[:12]
     JOBS[jid] = {"id": jid, "status": "queued", "progress": 0.0, "message": "Na fila…", "images": [], "seeds": [], "processed_prompt": "", "error": None, "cancel": False, "created": time.time()}
-    for old in sorted(JOBS.values(), key=lambda j: j["created"])[:-8]:
+    finished = sorted(
+        (j for j in JOBS.values() if j["status"] in ("done", "error", "cancelled")),
+        key=lambda j: j["created"],
+    )
+    for old in finished[:-20]:
         JOBS.pop(old["id"], None)
     Q.put((JOBS[jid], req))
     return {"id": jid}
