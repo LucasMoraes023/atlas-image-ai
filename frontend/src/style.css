@@ -296,3 +296,34 @@ footer{border-top-color:rgba(151,167,205,.12);background:rgba(8,10,17,.45)}
  .gallery-actions{flex-wrap:wrap}.gallery-actions button,.gallery-actions a{min-width:30px}
  .gallery-edit-overlay{opacity:1;transform:none;padding:6px 8px;font-size:10px}
 }
+
+
+/* CREATIVE LAB — editor upgrade */
+.edit-layout{grid-template-columns:minmax(0,1fr) 370px;gap:22px}
+.editcanvas{position:relative;min-height:560px;align-content:center;background:radial-gradient(ellipse at 50% 42%,rgba(106,89,180,.12),transparent 55%),#0c111d;overflow:hidden}
+.edit-stage{position:relative;display:grid;place-items:center;width:100%;max-height:68vh;min-height:260px;overflow:hidden;border:1px solid rgba(174,161,255,.16);border-radius:16px;background:linear-gradient(45deg,#151b29 25%,transparent 25%),linear-gradient(-45deg,#151b29 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#151b29 75%),linear-gradient(-45deg,transparent 75%,#151b29 75%);background-size:22px 22px;background-position:0 0,0 11px,11px -11px,-11px 0}
+.edit-stage.cropped-preview{width:min(100%,700px);max-height:68vh}
+.edit-stage .editpreview{display:block;width:100%;height:100%;max-width:100%;max-height:68vh;object-fit:contain;border-radius:0;transition:filter .15s ease}
+.edit-stage.cropped-preview .editpreview{object-fit:cover}
+.previewtext{position:absolute;left:5%;right:5%;transform:translateY(-50%);text-align:center;font-weight:900;line-height:1.08;letter-spacing:-.03em;text-shadow:0 3px 12px #000,0 1px 3px #000;overflow-wrap:anywhere;pointer-events:none}
+.edit-preview-actions{width:100%;display:flex;justify-content:space-between;align-items:center;color:var(--mu);font-size:12px}
+.edit-preview-actions button{min-height:34px;padding:0 12px}
+.edit-preview-actions svg{width:15px}
+.edit-toolbar{width:100%;padding-top:12px;border-top:1px solid var(--line)}
+.edit-toolbar button{min-height:40px;color:#cbd5e1}
+.edit-toolbar button:hover{border-color:var(--ac);background:rgba(139,92,246,.12)}
+.editcontrols{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;scrollbar-width:thin}
+.edit-control-section{padding:14px 0;border-top:1px solid var(--line)}
+.edit-control-section> b{display:flex;align-items:center;gap:8px;color:#e9e7ff;font-size:13px;letter-spacing:.02em}
+.edit-control-section> b svg{width:16px;color:#b7a4ff}
+.edit-control-section label{margin-top:13px}
+.edit-control-section .chips{margin-top:8px}
+.editcontrols .range{padding:3px 0}
+.editcontrols .range label{display:flex;justify-content:space-between;align-items:center}
+.editcontrols .range label b{color:#d8ccff;font-variant-numeric:tabular-nums}
+.editcontrols input[type=color]{width:100%;height:42px;padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+.editcontrols .export{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.editcontrols .export button{padding:0 10px;font-size:12px}
+.editcontrols .micro{line-height:1.6}
+@media(max-width:900px){.edit-layout{grid-template-columns:1fr}.editcanvas{min-height:340px;padding:12px}.edit-stage{min-height:220px;max-height:52vh}.edit-stage .editpreview{max-height:52vh}.editcontrols{position:static;max-height:none;overflow:visible}.editcontrols .export{grid-template-columns:1fr 1fr}}
+@media(max-width:440px){.edit-toolbar{gap:6px}.edit-toolbar button{flex:1 1 42%;justify-content:center;font-size:12px}.editcontrols .export{grid-template-columns:1fr}}
