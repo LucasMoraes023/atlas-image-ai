@@ -1,0 +1,67 @@
+name: Project validation
+
+on:
+  push:
+    branches: [main, atlas-studio-next]
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - "colab/**"
+      - ".github/workflows/project-validation.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - "colab/**"
+      - ".github/workflows/project-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend production build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm ci
+      - name: Build production
+        run: npm run build
+
+  backend:
+    name: Backend and Colab validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check Python syntax
+        run: python -m py_compile backend/api.py
+      - name: Validate Colab notebook JSON and backend source
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          notebook = json.loads(Path("colab/ATLAS_IMAGE_AI_COLAB.ipynb").read_text(encoding="utf-8"))
+          assert notebook.get("nbformat") == 4
+          cells = notebook.get("cells", [])
+          assert len(cells) >= 4
+          setup = "".join(cells[2].get("source", []))
+          assert "backend/api.py" in setup
+          assert "atlas-studio-next" in setup
+          print("Notebook JSON válido e apontando para o backend versionado.")
+          PY
