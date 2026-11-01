@@ -216,3 +216,6 @@ footer{border-top-color:rgba(151,167,205,.12);background:rgba(8,10,17,.45)}
 }
 .notice b{color:#f4cf84}
 .notice p{line-height:1.55}
+
+.filter-presets{gap:7px}
+.filter-presets .chip{padding:7px 10px;font-size:12px}
