@@ -122,9 +122,9 @@ def enhance_prompt(text):
         n = "Qwen/Qwen2.5-1.5B-Instruct"
         LLM["tok"], LLM["mdl"] = AutoTokenizer.from_pretrained(n), AutoModelForCausalLM.from_pretrained(n, torch_dtype=torch.float16)
     t, m = LLM["tok"], LLM["mdl"].to("cuda")
-    chat = t.apply_chat_template([{"role": "system", "content": SYS}, {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True)
-    ids = t(chat, return_tensors="pt").to("cuda")
     try:
+        chat = t.apply_chat_template([{"role": "system", "content": SYS}, {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True)
+        ids = t(chat, return_tensors="pt").to("cuda")
         with torch.no_grad():
             out = m.generate(**ids, max_new_tokens=160, do_sample=True, temperature=0.7, top_p=0.9)
         res = t.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip().strip('"')
