@@ -207,3 +207,12 @@ footer{border-top-color:rgba(151,167,205,.12);background:rgba(8,10,17,.45)}
 @media(prefers-reduced-motion:reduce){
   button,a,.panel,.nav,.chip,.ratio,.idea,.result,.galleryitem{transition:none}
 }
+
+
+.model-note{
+  margin-top:8px;padding:10px 12px;border:1px solid rgba(151,167,205,.13);
+  border-radius:11px;background:rgba(8,12,21,.48);color:#9eabc2;
+  font-size:12px;line-height:1.55;
+}
+.notice b{color:#f4cf84}
+.notice p{line-height:1.55}
