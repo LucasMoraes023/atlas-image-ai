@@ -1,5 +1,5 @@
 # ATLAS IMAGE AI: API de geração (FastAPI). Roda no Colab; o notebook a publica por um túnel HTTPS.
-import base64, gc, io, os, queue, random, secrets, threading, time, uuid
+import base64, binascii, gc, io, os, queue, random, secrets, threading, time, uuid
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
@@ -46,19 +46,58 @@ class Req(BaseModel):
     strength: float = Field(default=0.6, ge=0.05, le=1.0)
     upscale: float = Field(default=1.0, ge=1.0, le=2.0)
 
+    @field_validator("prompt")
+    @classmethod
+    def _clean_prompt(cls, v):
+        value = v.strip()
+        if not value:
+            raise ValueError("Descreva o que deseja gerar.")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def _valid_model(cls, v):
+        if v not in MODELS:
+            raise ValueError("Modelo não disponível.")
+        return v
+
+    @field_validator("size")
+    @classmethod
+    def _valid_size(cls, v):
+        if v not in SIZES:
+            raise ValueError("Formato de imagem não disponível.")
+        return v
+
+    @field_validator("style")
+    @classmethod
+    def _valid_style(cls, v):
+        if v != "Nenhum" and v not in STYLES:
+            raise ValueError("Estilo não disponível.")
+        return v
+
     @field_validator("init_image", mode="before")
     @classmethod
-    def _no_image(cls, v):
-        return v or ""
+    def _validate_image_payload(cls, v):
+        if not v:
+            return ""
+        if not isinstance(v, str) or len(v) > 14_000_000:
+            raise ValueError("Imagem muito grande. Limite de envio: 10 MB.")
+        if not v.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")):
+            raise ValueError("Formato inválido. Envie PNG, JPEG ou WebP.")
+        payload = v.split(",", 1)[1]
+        if len(payload) > 14_000_000:
+            raise ValueError("Imagem muito grande. Limite de envio: 10 MB.")
+        return v
 
 
 def auth(x_atlas_key: str = Header(default="")):
-    if not KEY or not secrets.compare_digest(x_atlas_key, KEY):
+    if not KEY or not x_atlas_key or not secrets.compare_digest(x_atlas_key, KEY):
         raise HTTPException(401, "Chave inválida. Use o link de conexão que o notebook mostrou.")
 
 
 JOBS, Q = {}, queue.Queue()
 ST = {"pipe": None, "name": None, "tok": None, "mdl": None, "i2i": None}
+GPU_LOCK = threading.Lock()
 
 
 def to_en(text):
@@ -83,13 +122,17 @@ def enhance_prompt(text):
         n = "Qwen/Qwen2.5-1.5B-Instruct"
         LLM["tok"], LLM["mdl"] = AutoTokenizer.from_pretrained(n), AutoModelForCausalLM.from_pretrained(n, torch_dtype=torch.float16)
     t, m = LLM["tok"], LLM["mdl"].to("cuda")
-    chat = t.apply_chat_template([{"role": "system", "content": SYS}, {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True)
-    ids = t(chat, return_tensors="pt").to("cuda")
-    with torch.no_grad():
-        out = m.generate(**ids, max_new_tokens=160, do_sample=True, temperature=0.7, top_p=0.9)
-    res = t.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip().strip('"')
-    m.to("cpu"); gc.collect(); torch.cuda.empty_cache()
-    return res or text
+    try:
+        chat = t.apply_chat_template([{"role": "system", "content": SYS}, {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True)
+        ids = t(chat, return_tensors="pt").to("cuda")
+        with torch.no_grad():
+            out = m.generate(**ids, max_new_tokens=160, do_sample=True, temperature=0.7, top_p=0.9)
+        res = t.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip().strip('"')
+        return res or text
+    finally:
+        m.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 def load_model(name):
@@ -173,7 +216,19 @@ def run(job, req):
     if req.init_image:
         import PIL.Image as PI
         from diffusers import AutoPipelineForImage2Image
-        img0 = PI.open(io.BytesIO(base64.b64decode(req.init_image.split(",", 1)[-1]))).convert("RGB")
+        try:
+            raw = base64.b64decode(req.init_image.split(",", 1)[1], validate=True)
+            if len(raw) > 10 * 1024 * 1024:
+                raise ValueError("Imagem acima do limite de 10 MB.")
+            with PI.open(io.BytesIO(raw)) as check:
+                if check.format not in ("PNG", "JPEG", "WEBP"):
+                    raise ValueError("Formato de imagem não suportado.")
+                if check.width * check.height > 16_000_000:
+                    raise ValueError("A imagem excede o limite de 16 megapixels.")
+                check.verify()
+            img0 = PI.open(io.BytesIO(raw)).convert("RGB")
+        except (binascii.Error, OSError) as e:
+            raise ValueError("Não foi possível ler a imagem. Envie um PNG, JPEG ou WebP válido.") from e
         if req.upscale > 1:
             f = min(req.upscale, 1536 / max(img0.size))
         else:
@@ -204,8 +259,9 @@ def run(job, req):
         buf = io.BytesIO(); img.save(buf, format="PNG")
         job["images"].append("data:image/png;base64," + base64.b64encode(buf.getvalue()).decode())
         job["seeds"].append(s)
-    job["progress"] = 1.0
     job["status"] = "cancelled" if job["cancel"] else "done"
+    if job["status"] == "done":
+        job["progress"] = 1.0
     job["message"] = "Cancelado." if job["cancel"] else " ".join(["Concluído."] + notes)
 
 
@@ -213,12 +269,13 @@ def worker():
     while True:
         job, req = Q.get()
         try:
-            run(job, req)
+            with GPU_LOCK:
+                run(job, req)
         except torch.cuda.OutOfMemoryError:
             gc.collect(); torch.cuda.empty_cache()
             job.update(status="error", error="GPU sem memória. Use SDXL-Turbo ou um formato menor.")
         except Exception as e:
-            job.update(status="error", error=f"{type(e).__name__}: {e}")
+            job.update(status="error", error=f"Falha ao processar ({type(e).__name__}). Verifique o modelo, a memória da GPU e tente novamente.")
 
 
 threading.Thread(target=worker, daemon=True).start()
@@ -226,7 +283,7 @@ threading.Thread(target=worker, daemon=True).start()
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "model": ST["name"]}
+    return {"status": "ok", "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "model": ST["name"], "models": list(MODELS), "queue": Q.qsize()}
 
 
 @app.post("/jobs", dependencies=[Depends(auth)])
@@ -239,7 +296,11 @@ def create(req: Req):
         raise HTTPException(429, "Fila cheia. Aguarde terminar.")
     jid = uuid.uuid4().hex[:12]
     JOBS[jid] = {"id": jid, "status": "queued", "progress": 0.0, "message": "Na fila…", "images": [], "seeds": [], "processed_prompt": "", "error": None, "cancel": False, "created": time.time()}
-    for old in sorted(JOBS.values(), key=lambda j: j["created"])[:-8]:
+    finished = sorted(
+        (j for j in JOBS.values() if j["status"] in ("done", "error", "cancelled")),
+        key=lambda j: j["created"],
+    )
+    for old in finished[:-20]:
         JOBS.pop(old["id"], None)
     Q.put((JOBS[jid], req))
     return {"id": jid}
@@ -270,7 +331,11 @@ class PReq(BaseModel):
 
 @app.post("/prompt", dependencies=[Depends(auth)])
 def improve(req: PReq):
+    if not GPU_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "A GPU está ocupada com outra tarefa. Aguarde a geração terminar e tente novamente.")
     try:
         return {"prompt": enhance_prompt(req.prompt.strip())}
     except Exception as e:
         raise HTTPException(500, f"Não foi possível melhorar o prompt ({type(e).__name__}).")
+    finally:
+        GPU_LOCK.release()
